@@ -34,7 +34,47 @@ case "$KSU_VARIANT" in
     # SukiSU 走 main 分支后不再内置 SUSFS 钩子，与 Official 一样外部打集成补丁
     cd ./KernelSU
     cp "$SUSFS4KSU"/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ./
+    # --forward + || true：10_enable 补丁基线为 2026-09-23，与 SukiSU main 最新版部分 hunk 不匹配，
+    # 保留 patch 失败继续执行，由下方自愈逻辑按缺失检测恢复，避免 set -e 中断
     patch -p1 --forward < 10_enable_susfs_for_ksu.patch || true
+
+    # 自愈：10_enable 补丁成功应用的 hunk 删除了 main 最新版仍在使用的 include / 定义 / Kbuild 编译单元，
+    # 导致 core/init.c 编译失败（ksu_late_loaded / ksu_lsm_hook_init / ksu_app_profile_init /
+    # ksu_syscall_hook_manager_init/exit 未声明）。以下均为幂等操作：只补缺失项，不重复插入。
+    # 1) init.c 恢复被删的 hook include（新版 init 流程仍调用 lsm_hook / syscall_hook_manager）
+    if ! grep -qF '#include "hook/syscall_hook_manager.h"' kernel/core/init.c; then
+      sed -i '/^#include "manager\/throne_tracker.h"$/a #include "hook/syscall_hook_manager.h"\n#include "hook/lsm_hook.h"' kernel/core/init.c
+      echo "自愈: 恢复 init.c 的 syscall_hook_manager.h / lsm_hook.h include"
+    fi
+    # 2) init.c 恢复被删的 ksu_late_loaded 全局变量定义
+    if ! grep -qF 'bool ksu_late_loaded;' kernel/core/init.c; then
+      sed -i '/^struct cred \*ksu_cred;$/a bool ksu_late_loaded;' kernel/core/init.c
+      echo "自愈: 恢复 init.c 的 bool ksu_late_loaded 定义"
+    fi
+    # 3) app_profile.h 恢复被删的 ksu_app_profile_init 声明（init.c 仍在调用）
+    if ! grep -qF 'ksu_app_profile_init' kernel/policy/app_profile.h; then
+      sed -i '/^int escape_to_root_for_init(void);$/a void __init ksu_app_profile_init(void);' kernel/policy/app_profile.h
+      echo "自愈: 恢复 app_profile.h 的 ksu_app_profile_init 声明"
+    fi
+    # 4) Kbuild 恢复被删的 hook 编译单元（新版 init.c 仍引用其中符号，缺失会导致链接失败）
+    if ! grep -qF 'hook/syscall_hook_manager.o' kernel/Kbuild; then
+      sed -i '/^kernelsu-objs += hook\/setuid_hook.o$/a kernelsu-objs += hook/lsm_hook.o\nkernelsu-objs += hook/syscall_event_bridge.o\nkernelsu-objs += hook/syscall_hook_manager.o\nkernelsu-objs += hook/tp_marker.o\nifeq ($(CONFIG_ARM64),y)\nkernelsu-objs += hook/arm64/patch_memory.o\nkernelsu-objs += hook/arm64/syscall_hook.o\nelse ifeq ($(CONFIG_X86_64),y)\nkernelsu-objs += hook/x86_64/patch_memory.o\nkernelsu-objs += hook/x86_64/syscall_hook.o\nelse ifeq ($(CONFIG_RISCV),y)\nkernelsu-objs += hook/riscv64/patch_memory.o\nkernelsu-objs += hook/riscv64/syscall_hook.o\nendif' kernel/Kbuild
+      echo "自愈: 恢复 Kbuild 中被补丁删除的 hook 编译单元"
+    fi
+    # 5) Kbuild 恢复被删的 infra/symbol_resolver.o（init.c 仍调用 ksu_init_symbol_resolver）
+    if ! grep -qF 'infra/symbol_resolver.o' kernel/Kbuild; then
+      sed -i '/^kernelsu-objs += infra\/su_mount_ns.o$/a kernelsu-objs += infra/symbol_resolver.o' kernel/Kbuild
+      echo "自愈: 恢复 Kbuild 的 infra/symbol_resolver.o"
+    fi
+    # 6) 自愈完成后移除 init.c.rej / init.c.orig，避免后续 SUSFS 主补丁冲突统计误报
+    if [ -f kernel/core/init.c.rej ]; then
+      rm -f kernel/core/init.c.rej
+      echo "自愈: 移除已处理的 init.c.rej"
+    fi
+    if [ -f kernel/core/init.c.orig ]; then
+      rm -f kernel/core/init.c.orig
+      echo "自愈: 移除 patch 生成的 init.c.orig 备份"
+    fi
 
     cd ..
     ;;
