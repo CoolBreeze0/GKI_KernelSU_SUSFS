@@ -544,7 +544,7 @@ jobs:
               ;;
             "SukiSU")
               # 始终跟随 main 分支最新，与管理器 main 分支（UAPI=5）对齐；
-              # SUSFS 集成改由 apply-20261009.sh 打 10_enable_susfs_for_ksu.patch 完成
+              # SUSFS 集成改由 apply.sh 打 10_enable_susfs_for_ksu.patch 完成
               BRANCH="-s main"
               ;;
             "Next")
@@ -807,7 +807,7 @@ jobs:
         if: inputs.export_susfs_patches && inputs.enable_susfs && inputs.ksu_mode != '禁用KSU' && (inputs.ksu_variant == 'SukiSU' || inputs.ksu_variant == 'BakaSU')
         working-directory: ${{ env.KERNEL_ROOT }}/common
         run: |
-          # 排除 .rej/.orig 和补丁文件本身：apply-20261009.sh 会把 SUSFS 补丁拷进 common/ 并留下 .rej
+          # 排除 .rej/.orig 和补丁文件本身：apply.sh 会把 SUSFS 补丁拷进 common/ 并留下 .rej
           # 从真实索引复制一份再 add，只需哈希变动文件，避免对整棵内核树重新哈希
           cp "$(git rev-parse --git-path index)" /tmp/susfs-base.idx
           export GIT_INDEX_FILE=/tmp/susfs-base.idx
@@ -826,7 +826,7 @@ jobs:
           KSU_VARIANT: ${{ inputs.ksu_variant }}
           OS_PATCH_LEVEL: ${{ inputs.os_patch_level }}
           SUB_LEVEL: ${{ inputs.sub_level }}
-        run: bash "$GITHUB_WORKSPACE/scripts/susfs_fixes/apply-20261009.sh"
+        run: bash "$GITHUB_WORKSPACE/scripts/susfs_fixes/apply.sh"
 
       - name: 生成 SUSFS 集成补丁
         if: env.SUSFS_PATCH_EXPORT == 'true'
