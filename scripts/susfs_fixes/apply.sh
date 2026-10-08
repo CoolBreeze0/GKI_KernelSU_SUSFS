@@ -76,6 +76,16 @@ case "$KSU_VARIANT" in
       echo "自愈: 移除 patch 生成的 init.c.orig 备份"
     fi
 
+    # 7) bridge.c 适配：10_enable 补丁把 sucompat/ksud/event/adb_root/setuid_hook 的声明
+    #    替换为官方 KernelSU 签名，与 main 自带 pt_regs 风格 syscall_event_bridge.c 冲突。
+    #    adapt_bridge.py 校验旧桥锚点后整体替换为对齐版（幂等）；main 结构变化导致
+    #    锚点不符时以 exit 2 中断构建，避免半打源码继续编译产生误导性报错。
+    SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    python3 "$SELF_DIR/adapt_bridge.py" . || {
+      echo "::error::syscall_event_bridge.c 与适配脚本锚点不一致，需人工复查 main 更新" >&2
+      exit 2
+    }
+
     cd ..
     ;;
   "Next"|"SukiSU(40726)"|"SukiSU(40548)"|"BakaSU")
