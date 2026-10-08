@@ -543,11 +543,9 @@ jobs:
               BRANCH="-s main"
               ;;
             "SukiSU")
-              if [ "${{ inputs.enable_susfs }}" = "false" ]; then
-                BRANCH="-s main"
-              else
-                BRANCH="-s builtin"
-              fi
+              # 始终跟随 main 分支最新，与管理器 main 分支（UAPI=5）对齐；
+              # SUSFS 集成改由 apply.sh 打 10_enable_susfs_for_ksu.patch 完成
+              BRANCH="-s main"
               ;;
             "Next")
               BRANCH=""
