@@ -644,6 +644,30 @@ jobs:
             echo "arch.h 已存在，跳过"
           fi
 
+      - name: 修复 SukiSU builtin 分支编译错误（EVENT_SERVICES / rules.c 重复声明）
+        if: inputs.ksu_mode != '禁用KSU'
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          # 上游 builtin 分支(70fa0e09)同步官方时两处遗漏：
+          # 1) dispatch.c 使用 EVENT_SERVICES 但 uapi/supercall.h 未定义 → 补 DECLARE(EVENT_SERVICES, 4)
+          # 2) rules.c apply_kernelsu_rules() 内重复声明 pol/old_pol → 删除 162 行重复声明
+          SUPERCALL=KernelSU/kernel/include/uapi/supercall.h
+          RULES=KernelSU/kernel/selinux/rules.c
+
+          if [ -f "$SUPERCALL" ] && ! grep -q "EVENT_SERVICES" "$SUPERCALL"; then
+            sed -i 's/DECLARE(__u32, EVENT_MODULE_MOUNTED, 3);/DECLARE(__u32, EVENT_MODULE_MOUNTED, 3);\nDECLARE(__u32, EVENT_SERVICES, 4);/' "$SUPERCALL"
+            echo "已补充 EVENT_SERVICES 定义"
+          else
+            echo "EVENT_SERVICES 已存在或文件缺失，跳过"
+          fi
+
+          if [ -f "$RULES" ]; then
+            sed -i '/struct selinux_policy \*pol, \*old_pol = selinux_state.policy;/d' "$RULES"
+            echo "已清理 rules.c 重复声明"
+          else
+            echo "rules.c 缺失，跳过"
+          fi
+
       - name: 配置 SukiSU 管理器信息
         if: (inputs.ksu_variant == 'SukiSU' || inputs.ksu_variant == 'SukiSU(40726)' || inputs.ksu_variant == 'SukiSU(40548)') && inputs.ksu_mode != '禁用KSU'
         working-directory: ${{ env.KERNEL_ROOT }}/KernelSU
