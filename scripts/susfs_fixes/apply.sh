@@ -56,6 +56,17 @@ case "$KSU_VARIANT" in
       sed -i '/^int escape_to_root_for_init(void);$/a void __init ksu_app_profile_init(void);' kernel/policy/app_profile.h
       echo "自愈: 恢复 app_profile.h 的 ksu_app_profile_init 声明"
     fi
+    # 3.5) app_profile.c 恢复被删的 ksu_app_profile_init 定义（10_enable 补丁按官方结构
+    #      删除了整个定义而 init.c 仍在调用；只恢复声明会链接报 undefined symbol）
+    if ! grep -qF 'void __init ksu_app_profile_init(void)' kernel/policy/app_profile.c; then
+      cat >> kernel/policy/app_profile.c <<'EOF'
+
+void __init ksu_app_profile_init(void)
+{
+}
+EOF
+      echo "自愈: 恢复 app_profile.c 的 ksu_app_profile_init 定义"
+    fi
     # 4) Kbuild 恢复被删的 hook 编译单元（新版 init.c 仍引用其中符号，缺失会导致链接失败）
     if ! grep -qF 'hook/syscall_hook_manager.o' kernel/Kbuild; then
       sed -i '/^kernelsu-objs += hook\/setuid_hook.o$/a kernelsu-objs += hook/lsm_hook.o\nkernelsu-objs += hook/syscall_event_bridge.o\nkernelsu-objs += hook/syscall_hook_manager.o\nkernelsu-objs += hook/tp_marker.o\nifeq ($(CONFIG_ARM64),y)\nkernelsu-objs += hook/arm64/patch_memory.o\nkernelsu-objs += hook/arm64/syscall_hook.o\nelse ifeq ($(CONFIG_X86_64),y)\nkernelsu-objs += hook/x86_64/patch_memory.o\nkernelsu-objs += hook/x86_64/syscall_hook.o\nelse ifeq ($(CONFIG_RISCV),y)\nkernelsu-objs += hook/riscv64/patch_memory.o\nkernelsu-objs += hook/riscv64/syscall_hook.o\nendif' kernel/Kbuild
