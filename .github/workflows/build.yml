@@ -630,6 +630,20 @@ jobs:
             echo "KSU_LATEST_COMMIT_DATE=未知" >> $GITHUB_ENV
           fi
 
+      - name: 修复 KSU 缺失的 arch.h（上游 builtin 分支缺陷）
+        if: inputs.ksu_mode != '禁用KSU'
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          if [ ! -f "KernelSU/kernel/include/arch.h" ]; then
+            echo "检测到 KernelSU/kernel/include/arch.h 缺失，从 SukiSU-Ultra main 分支补拉..."
+            mkdir -p KernelSU/kernel/include
+            curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/include/arch.h" \
+              -o KernelSU/kernel/include/arch.h
+            echo "arch.h 已补齐"
+          else
+            echo "arch.h 已存在，跳过"
+          fi
+
       - name: 配置 SukiSU 管理器信息
         if: (inputs.ksu_variant == 'SukiSU' || inputs.ksu_variant == 'SukiSU(40726)' || inputs.ksu_variant == 'SukiSU(40548)') && inputs.ksu_mode != '禁用KSU'
         working-directory: ${{ env.KERNEL_ROOT }}/KernelSU
