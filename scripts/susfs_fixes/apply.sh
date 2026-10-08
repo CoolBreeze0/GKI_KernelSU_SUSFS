@@ -30,15 +30,16 @@ cp "$SUSFS4KSU"/kernel_patches/fs/* ./common/fs/
 cp "$SUSFS4KSU"/kernel_patches/include/linux/* ./common/include/linux/
 
 case "$KSU_VARIANT" in
-  "Official")
+  "Official"|"SukiSU")
+    # SukiSU 走 main 分支后不再内置 SUSFS 钩子，与 Official 一样外部打集成补丁
     cd ./KernelSU
     cp "$SUSFS4KSU"/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ./
     patch -p1 --forward < 10_enable_susfs_for_ksu.patch || true
 
     cd ..
     ;;
-  "Next"|"SukiSU"|"SukiSU(40726)"|"SukiSU(40548)"|"BakaSU")
-    echo "Next/SukiSU/SukiSU(40726)/SukiSU(40548)/BakaSU 使用内置 SUSFS 支持"
+  "Next"|"SukiSU(40726)"|"SukiSU(40548)"|"BakaSU")
+    echo "Next/SukiSU(40726)/SukiSU(40548)/BakaSU 使用内置 SUSFS 支持"
     ;;
 esac
 
