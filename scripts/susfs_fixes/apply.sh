@@ -162,24 +162,49 @@ fi
 # 内核（5.15.211 / 6.1.176），相关 hunk 上下文带上了 #include <trace/hooks/blk.h>
 # （namespace.c）与 #include <trace/hooks/mm.h>（task_mmu.c）；部分目标内核源码
 # 没有这些行，hunk 会被整段拒绝，进而导致后续编译失败。这些 include 对 SUSFS
-# 没有功能影响，仅作补丁上下文锚点，补丁应用完毕后会还原
+# 没有功能影响，仅作补丁上下文锚点，补丁应用完毕后会还原。
+# 用变量承接 patch_file_section 的输出，避免 | grep -q 管道在 pipefail 下
+# 因 SIGPIPE 误判条件为假。
 SUSFS_NS_BLK_H_ADDED=0
 SUSFS_TASK_MMU_MM_H_ADDED=0
-if patch_file_section fs/namespace.c "$SUSFS_PATCH" | grep -q '^ #include <trace/hooks/blk.h>$' \
+NS_PATCH_SECTION="$(patch_file_section fs/namespace.c "$SUSFS_PATCH" 2>/dev/null || true)"
+if grep -q '^ #include <trace/hooks/blk.h>$' <<<"$NS_PATCH_SECTION" \
   && ! grep -qF '#include <trace/hooks/blk.h>' fs/namespace.c; then
   echo "临时为 namespace.c 补上 trace/hooks/blk.h（匹配新版 SUSFS 补丁上下文）"
   sed -i '/^#include "internal.h"$/a #include <trace/hooks/blk.h>' fs/namespace.c
   SUSFS_NS_BLK_H_ADDED=1
 fi
-if [ -f fs/proc/task_mmu.c ] \
-  && patch_file_section fs/proc/task_mmu.c "$SUSFS_PATCH" | grep -q '^ #include <trace/hooks/mm.h>$' \
-  && ! grep -qF '#include <trace/hooks/mm.h>' fs/proc/task_mmu.c; then
-  echo "临时为 task_mmu.c 补上 trace/hooks/mm.h（匹配新版 SUSFS 补丁上下文）"
-  sed -i '/^#include <linux\/pkeys.h>$/a #include <trace/hooks/mm.h>' fs/proc/task_mmu.c
-  SUSFS_TASK_MMU_MM_H_ADDED=1
+if [ -f fs/proc/task_mmu.c ]; then
+  TASK_MMU_PATCH_SECTION="$(patch_file_section fs/proc/task_mmu.c "$SUSFS_PATCH" 2>/dev/null || true)"
+  if grep -q '^ #include <trace/hooks/mm.h>$' <<<"$TASK_MMU_PATCH_SECTION" \
+    && ! grep -qF '#include <trace/hooks/mm.h>' fs/proc/task_mmu.c; then
+    echo "临时为 task_mmu.c 补上 trace/hooks/mm.h（匹配新版 SUSFS 补丁上下文）"
+    sed -i '/^#include <linux\/pkeys.h>$/a #include <trace/hooks/mm.h>' fs/proc/task_mmu.c
+    SUSFS_TASK_MMU_MM_H_ADDED=1
+  fi
 fi
 
+echo "SUSFS 上下文诊断: 补丁 namespace.c 段行数=$(printf '%s\n' "$NS_PATCH_SECTION" | wc -l), 内核 blk.h 行数=$(grep -c 'trace/hooks/blk.h' fs/namespace.c 2>/dev/null || echo 0), namespace.c 补行=$SUSFS_NS_BLK_H_ADDED"
+
 patch -p1 < "$SUSFS_PATCH" || true
+
+# 兜底：若 namespace.c / task_mmu.c 仍产生补丁冲突（hunk 上下文含内核没有的
+# trace/hooks 行），从 .rej 中移除该行上下文后重新应用被拒绝的 hunk。
+# 该兜底不依赖上面的补行条件，确保上下文不匹配时补丁仍能应用；仅重试成功
+# 才删除 .rej，其他原因导致的冲突保留以供诊断。
+for SUSFS_REJ in fs/namespace.c.rej fs/proc/task_mmu.c.rej; do
+  if [[ -f "$SUSFS_REJ" ]]; then
+    echo "$SUSFS_REJ 补丁冲突：移除 trace/hooks 上下文行后重试"
+    sed -i '/^ #include <trace\/hooks\/blk.h>$/d; /^ #include <trace\/hooks\/mm.h>$/d' "$SUSFS_REJ"
+    if patch -p0 --batch --no-backup-if-mismatch --dry-run < "$SUSFS_REJ" > /dev/null 2>&1; then
+      patch -p0 --batch --no-backup-if-mismatch < "$SUSFS_REJ" > /dev/null 2>&1 || true
+      rm -f "$SUSFS_REJ"
+      echo "  已修复 $SUSFS_REJ"
+    else
+      echo "  $SUSFS_REJ 重试后仍无法应用（非 trace/hooks 上下文问题），保留"
+    fi
+  fi
+done
 
 # 为尚未提供 SU 会话 FD 接口的 SukiSU/BakaSU 恢复旧版 exec hook 行为
 EXEC_HELPER=""
