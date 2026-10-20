@@ -22,6 +22,16 @@ list_untracked_rej() {
     <(list_upstream_rej | sort)
 }
 
+# 提取补丁中指定文件（如 fs/namespace.c）的 diff 段。
+# 用字段匹配而非 /start/,/end/ 范围模式：mawk 会把 diff 行后的 "--git"
+# 误判为 end 模式 /^diff / 的匹配（diff 后即空格），导致段内容被截断。
+patch_file_section() {
+  awk -v target="a/$1" '
+    /^diff --git / { in_section = ($3 == target) }
+    in_section { print }
+  ' "$2"
+}
+
 echo "应用 SUSFS 补丁..."
 
 SUSFS_PATCH="50_add_susfs_in_gki-$ANDROID_VERSION-$KERNEL_VERSION.patch"
@@ -90,7 +100,10 @@ if [[ "$ANDROID_VERSION" == "android13" && "$KERNEL_VERSION" == "5.15" ]]; then
     fi
     adjust_legacy_fdinfo_context
   fi
-  if [[ "$OS_PATCH_LEVEL" == "lts" ]]; then
+  # 仅旧版 SUSFS 补丁（namespace.c 上下文不含 trace/hooks/blk.h）需要从
+  # LTS 内核删除这两行；新版补丁上下文已包含它们，删除反而会导致 hunk 被拒
+  if [[ "$OS_PATCH_LEVEL" == "lts" ]] \
+    && ! patch_file_section fs/namespace.c "$SUSFS_PATCH" | grep -q '^ #include <trace/hooks/blk.h>$'; then
     echo "临时调整 Android 13 5.15 LTS 头文件上下文"
     sed -i '/^#include <trace\/hooks\/blk.h>$/d' fs/namespace.c
     sed -i '/^#include <trace\/hooks\/mm.h>$/d' fs/proc/task_mmu.c
@@ -106,7 +119,10 @@ if [[ "$ANDROID_VERSION" == "android14" && "$KERNEL_VERSION" == "6.1" ]]; then
     echo "临时调整 Android 14 6.1 dma-buf.h 上下文"
     sed -i '/^#include <linux\/cpufreq_times.h>$/a #include <linux/dma-buf.h>' fs/proc/base.c
   fi
-  if [[ "$CURRENT_SUB" -ge 157 ]]; then
+  # 仅旧版 SUSFS 补丁（namespace.c 上下文不含 trace/hooks/blk.h）需要从
+  # 6.1.157+ 内核删除该行；新版补丁上下文已包含它，删除反而会导致 hunk 被拒
+  if [[ "$CURRENT_SUB" -ge 157 ]] \
+    && ! patch_file_section fs/namespace.c "$SUSFS_PATCH" | grep -q '^ #include <trace/hooks/blk.h>$'; then
     echo "临时调整 Android 14 6.1 namespace.c 上下文"
     sed -i '/^#include <trace\/hooks\/blk.h>$/d' fs/namespace.c
   fi
@@ -140,6 +156,27 @@ if grep -q '^ static int thaw_super_locked' "$SUSFS_PATCH" \
   echo "临时调整 super.c 上下文"
   sed -i '/^#include <trace\/hooks\/fs.h>$/,+1d' fs/super.c
   SUPER_FS_H_REMOVED=1
+fi
+
+# 上游 2026-10-18/19 将 android13-5.15 / android14-6.1 的 SUSFS 补丁 rebase 到更新的
+# 内核（5.15.211 / 6.1.176），相关 hunk 上下文带上了 #include <trace/hooks/blk.h>
+# （namespace.c）与 #include <trace/hooks/mm.h>（task_mmu.c）；部分目标内核源码
+# 没有这些行，hunk 会被整段拒绝，进而导致后续编译失败。这些 include 对 SUSFS
+# 没有功能影响，仅作补丁上下文锚点，补丁应用完毕后会还原
+SUSFS_NS_BLK_H_ADDED=0
+SUSFS_TASK_MMU_MM_H_ADDED=0
+if patch_file_section fs/namespace.c "$SUSFS_PATCH" | grep -q '^ #include <trace/hooks/blk.h>$' \
+  && ! grep -qF '#include <trace/hooks/blk.h>' fs/namespace.c; then
+  echo "临时为 namespace.c 补上 trace/hooks/blk.h（匹配新版 SUSFS 补丁上下文）"
+  sed -i '/^#include "internal.h"$/a #include <trace/hooks/blk.h>' fs/namespace.c
+  SUSFS_NS_BLK_H_ADDED=1
+fi
+if [ -f fs/proc/task_mmu.c ] \
+  && patch_file_section fs/proc/task_mmu.c "$SUSFS_PATCH" | grep -q '^ #include <trace/hooks/mm.h>$' \
+  && ! grep -qF '#include <trace/hooks/mm.h>' fs/proc/task_mmu.c; then
+  echo "临时为 task_mmu.c 补上 trace/hooks/mm.h（匹配新版 SUSFS 补丁上下文）"
+  sed -i '/^#include <linux\/pkeys.h>$/a #include <trace/hooks/mm.h>' fs/proc/task_mmu.c
+  SUSFS_TASK_MMU_MM_H_ADDED=1
 fi
 
 patch -p1 < "$SUSFS_PATCH" || true
@@ -251,6 +288,18 @@ if [[ "$ANDROID_VERSION" == "android16" && "$KERNEL_VERSION" == "6.12" ]]; then
     echo "还原 Android 16 6.12 exec.c 临时调整"
     sed -i '0,/^#include /s//#include <linux\/dma-buf.h>\n&/' fs/exec.c
   fi
+fi
+
+# 还原仅为匹配新版 SUSFS 补丁上下文而补的 include（见补丁应用前的补行）：
+# 补丁应用不会删除上下文行，补行留下的 include 仍存在于文件中，因此用
+# 补行时设置的标记判断是否需要删除，恢复内核源码原状
+if [[ "$SUSFS_NS_BLK_H_ADDED" == 1 ]]; then
+  echo "还原 namespace.c 的 trace/hooks/blk.h 补行"
+  sed -i '/^#include <trace\/hooks\/blk.h>$/d' fs/namespace.c
+fi
+if [[ "$SUSFS_TASK_MMU_MM_H_ADDED" == 1 ]]; then
+  echo "还原 task_mmu.c 的 trace/hooks/mm.h 补行"
+  sed -i '/^#include <trace\/hooks\/mm.h>$/d' fs/proc/task_mmu.c
 fi
 
 if [[ -n "$SUPER_FS_H_REMOVED" ]] \
